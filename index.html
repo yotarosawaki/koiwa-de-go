@@ -2,10 +2,10 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>小岩でGO! 通学ダッシュ</title>
 <style>
-  html,body{margin:0;height:100%;background:#1b2233;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;
+  html,body{margin:0;height:100%;background:#1b2233;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-text-size-adjust:100%;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;
     font-family:"Hiragino Maru Gothic ProN","Hiragino Sans","Yu Gothic UI","Meiryo",sans-serif;color:#1f2a48}
   #game{position:absolute;left:0;top:0;width:540px;height:860px;transform-origin:0 0;overflow:hidden;border-radius:6px;box-shadow:0 0 40px rgba(0,0,0,.5)}
   canvas{position:absolute;left:0;top:0;width:540px;height:860px;display:block;touch-action:none}
@@ -33,6 +33,7 @@
   .row{display:flex;gap:10px;justify-content:center}
   .btn{border:none;border-radius:14px;padding:12px 20px;font:inherit;font-weight:bold;font-size:17px;cursor:pointer;color:#fff;background:#2f7fd8;box-shadow:0 4px 0 rgba(0,0,0,.25)}
   .btn.gray{background:#6b7385}
+  button{touch-action:manipulation}
   #btns{position:absolute;right:14px;top:140px;display:flex;flex-direction:column;gap:8px}
   #btns button{width:44px;height:44px;border-radius:50%;border:none;background:rgba(255,255,255,.85);font-size:20px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.25)}
 </style>
@@ -275,20 +276,68 @@ const SFX = {
   },
 };
 // BGM（簡単なシーケンサー）
-const MEL = [72, null, 76, 79, 77, 76, 74, null, 72, 74, 76, 72, 74, null, 67, null, 72, null, 76, 79, 81, 79, 77, 76, 74, 76, 74, 71, 72, null, null, null];
-const BASS = [48, 55, 52, 55, 50, 57, 53, 57, 48, 55, 52, 55, 43, 50, 47, 50, 48, 55, 52, 55, 53, 57, 60, 57, 43, 50, 47, 50, 48, 55, 48, null];
-let bgmOn = false, bgmStep = 0, bgmNext = 0;
-function bgmStart() { if (!AC) return; bgmOn = true; bgmStep = 0; bgmNext = AC.currentTime + 0.05; }
+// ===== BGM（軽快な曲：ドラム＋ベース＋コード＋メロディ） =====
+const SONG = {
+  bpm: 150, lead: 'square',
+  chords: [[60, [0, 4, 7]], [55, [0, 4, 7]], [57, [0, 3, 7]], [53, [0, 4, 7]], [60, [0, 4, 7]], [55, [0, 4, 7]], [53, [0, 4, 7]], [55, [0, 4, 7, 10]]],
+  mel: `E5 . G5 . C6 . G5 . E5 . G5 . A5 . G5 . | D5 . G5 . B5 . G5 . D5 . . . B4 . D5 . | C5 . E5 . A5 . E5 . C5 . E5 . G5 . E5 . | F5 . A5 . C6 . A5 . G5 . F5 . E5 . D5 .
+        E5 . . E5 G5 . . G5 C6 . B5 . A5 . G5 . | B4 . D5 . G5 . . . F5 . E5 . D5 . . . | A5 . . A5 G5 . F5 . E5 . F5 . G5 . A5 . | B5 . . . A5 . . . G5 . . . . . . .`,
+  bass: [0, null, 12, null, 0, null, 12, null, 0, null, 12, null, 7, null, 12, null],
+  kick: 'x...x...x...x...', snare: '....x.......x...', hat: 'x.x.x.x.x.x.x.x.', stab: '..x...x...x...x.',
+};
+const NOTE_NUM = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+function parseMel(s) {
+  return s.replace(/\|/g, ' ').trim().split(/\s+/).map(tk => {
+    if (tk === '.') return null;
+    const m = tk.match(/^([A-G])([#b]?)(\d)$/);
+    return 12 * (+m[3] + 1) + NOTE_NUM[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+  });
+}
+const SONG_MEL = parseMel(SONG.mel);
+let bgmOn = false, bgmStep = 0, bgmNext = 0, noiseBuf = null;
+function bgmStart() { if (!AC) return; bgmOn = true; bgmStep = 0; bgmNext = AC.currentTime + 0.06; }
 function bgmStop() { bgmOn = false; }
+function bnote(f, dur, type, vol, when, vib) {
+  const t = AC.currentTime + when, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (vib) { const l = AC.createOscillator(), lg = AC.createGain(); l.frequency.value = 6; lg.gain.value = f * 0.006; l.connect(lg); lg.connect(o.frequency); l.start(t); l.stop(t + dur + 0.05); }
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(vol * 0.6, t + dur * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+}
+function drum(kind, when) {
+  const t = AC.currentTime + when;
+  if (kind === 'k') {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    g.gain.setValueAtTime(0.32, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.2);
+    return;
+  }
+  if (!noiseBuf) { const n = AC.sampleRate * 0.3; noiseBuf = AC.createBuffer(1, n, AC.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; }
+  const src = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  src.buffer = noiseBuf; f.type = 'highpass';
+  const dur = kind === 's' ? 0.14 : 0.035;
+  f.frequency.value = kind === 's' ? 1400 : 7000;
+  g.gain.setValueAtTime(kind === 's' ? 0.16 : 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f); f.connect(g); g.connect(master); src.start(t); src.stop(t + dur + 0.02);
+  if (kind === 's') { const o = AC.createOscillator(), og = AC.createGain(); o.frequency.value = 190; og.gain.setValueAtTime(0.08, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.08); o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.1); }
+}
 function bgmTick(rate) {
   if (!bgmOn || !AC || muted) { if (AC) bgmNext = AC.currentTime + 0.05; return; }
-  const dur = 0.2 / rate;
-  while (bgmNext < AC.currentTime + 0.12) {
-    const w = bgmNext - AC.currentTime, i = bgmStep % 32;
-    if (MEL[i] != null) tone(mtof(MEL[i]), dur * 0.9, 'square', 0.035, w);
-    if (BASS[i] != null) tone(mtof(BASS[i]), dur * 0.95, 'triangle', 0.09, w);
-    if (i % 2 === 0) tone(90, 0.05, 'sine', 0.05, w, 50);
-    bgmStep++; bgmNext += dur;
+  const st = 60 / SONG.bpm / 4 / rate;                      // 16分音符の長さ
+  while (bgmNext < AC.currentTime + 0.15) {
+    const w = Math.max(0, bgmNext - AC.currentTime), i = bgmStep % SONG_MEL.length, s = i % 16, bar = Math.floor(i / 16);
+    const [root, iv] = SONG.chords[bar % SONG.chords.length];
+    if (SONG.kick[s] === 'x') drum('k', w);
+    if (SONG.snare[s] === 'x') drum('s', w);
+    if (SONG.hat[s] === 'x') drum('h', w);
+    const b = SONG.bass[s];
+    if (b != null) bnote(mtof(root - 12 + b), st * 1.7, 'triangle', 0.16, w);
+    if (SONG.stab[s] === 'x') for (const k of iv) bnote(mtof(root + k), st * 1.1, 'square', 0.016, w);
+    const m = SONG_MEL[i];
+    if (m != null) bnote(mtof(m), st * 1.9, SONG.lead, 0.05, w, true);
+    bgmStep++; bgmNext += st;
   }
 }
 
@@ -1389,6 +1438,13 @@ document.getElementById('bQuit').onclick = goTitle;
 document.getElementById('bPause').onclick = () => state === 'pause' ? resumeGame() : pauseGame();
 document.getElementById('bMute').onclick = (e) => { muted = !muted; e.currentTarget.textContent = muted ? '🔇' : '🔊'; };
 document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+// スマホでピンチやダブルタップで拡大されないようにする
+document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => { if (e.touches.length > 1 || e.scale && e.scale !== 1) e.preventDefault(); }, { passive: false });
+let lastTouchEnd = 0;
+document.addEventListener('touchend', e => { const now = Date.now(); if (now - lastTouchEnd < 350) e.preventDefault(); lastTouchEnd = now; }, { passive: false });
 
 // ===== ループ =====
 let last = performance.now();
